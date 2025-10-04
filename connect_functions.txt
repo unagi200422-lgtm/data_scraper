@@ -1,0 +1,89 @@
+﻿  const [isLoading, setIsLoading] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
+  const [connectedAccounts, setConnectedAccounts] = useState<{
+    facebook?: boolean
+    linkedin?: boolean
+  }>({})
+  const [isConnecting, setIsConnecting] = useState<string | null>(null)
+  const { toast } = useToast()
+
+  // Check connection status on mount
+  useEffect(() => {
+    checkConnectionStatus()
+  }, [])
+
+  const checkConnectionStatus = async () => {
+    try {
+      const response = await fetch('/api/connect/status')
+      if (response.ok) {
+        const data = await response.json()
+        setConnectedAccounts(data)
+      }
+    } catch (error) {
+      console.log('Could not check connection status')
+    }
+  }
+
+  const handleConnect = async (platform: 'facebook' | 'linkedin') => {
+    setIsConnecting(platform)
+    try {
+      const response = await fetch('/api/connect/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform })
+      })
+      
+      if (!response.ok) throw new Error('Failed to start connection')
+      
+      const { connectUrl, sessionId } = await response.json()
+      
+      // Open login window
+      const loginWindow = window.open(
+        connectUrl,
+        'login',
+        'width=600,height=700,scrollbars=yes,resizable=yes'
+      )
+      
+      if (!loginWindow) {
+        throw new Error('Popup blocked. Please allow popups and try again.')
+      }
+      
+      // Poll for completion
+      const pollForCompletion = async () => {
+        try {
+          const statusResponse = await fetch(`/api/connect/status?sessionId=${sessionId}`)
+          if (statusResponse.ok) {
+            const status = await statusResponse.json()
+            if (status.connected) {
+              loginWindow.close()
+              setConnectedAccounts(prev => ({ ...prev, [platform]: true }))
+              setIsConnecting(null)
+              toast({
+                title: "Connected Successfully",
+                description: `${platform.charAt(0).toUpperCase() + platform.slice(1)} account connected!`,
+              })
+              return
+            }
+          }
+        } catch (error) {
+          console.log('Polling error:', error)
+        }
+        
+        // Continue polling if window is still open
+        if (!loginWindow.closed) {
+          setTimeout(pollForCompletion, 2000)
+        } else {
+          setIsConnecting(null)
+        }
+      }
+      
+      setTimeout(pollForCompletion, 2000)
+      
+    } catch (error) {
+      setIsConnecting(null)
+      toast({
+        title: "Connection Failed",
+        description: error instanceof Error ? error.message : "Failed to connect account",
+      })
+    }
+  }
