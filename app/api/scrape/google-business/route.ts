@@ -33,74 +33,116 @@ interface GoogleBusinessData {
 
 async function scrapeGoogleBusiness(url: string): Promise<GoogleBusinessData> {
   try {
-    // Use Playwright with EXACT same logic as your Express server
-    const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
+    // Try Playwright first (works locally)
+    let playwrightData: any = null;
+    
+    try {
+      const { chromium } = await import('playwright');
+      const browser = await chromium.launch({ headless: true });
+      const page = await browser.newPage();
 
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-    // Extract specific fields using exact selectors from your Express server
-    const name = await page.locator('h1.DUwDvf.lfPIob').textContent().catch(() => null);
-    
-    // Get all Io6YTe elements and extract the right ones
-    const allElements = await page.locator('.Io6YTe.fontBodyMedium.kR99db.fdkmkc').all();
-    
-    let address = null;
-    let website = null;
-    
-    for (let i = 0; i < allElements.length; i++) {
-      const text = await allElements[i].textContent().catch(() => '');
+      // Extract specific fields using exact selectors from your Express server
+      const name = await page.locator('h1.DUwDvf.lfPIob').textContent().catch(() => null);
       
-      // Address - contains location details
-      if (text.includes('Rd') || text.includes('Nagar') || text.includes('Bengaluru') || text.includes('Karnataka')) {
-        address = text;
-      }
-      // Website - contains .com or website
-      else if (text.includes('.com') || text.includes('www')) {
-        website = text;
-      }
-    }
-    
-    // Phone - find div.rogA2c that contains phone number
-    const phone = await page.evaluate(() => {
-      const rogA2cElements = document.querySelectorAll('div.rogA2c');
+      // Get all Io6YTe elements and extract the right ones
+      const allElements = await page.locator('.Io6YTe.fontBodyMedium.kR99db.fdkmkc').all();
       
-      for (let element of rogA2cElements) {
-        const text = element.textContent?.trim();
+      let address = null;
+      let website = null;
+      
+      for (let i = 0; i < allElements.length; i++) {
+        const text = await allElements[i].textContent().catch(() => '');
         
-        if (text && text.match(/\d{3,}\s*\d{3,}\s*\d{3,}/)) {
-          return text;
+        // Address - contains location details
+        if (text.includes('Rd') || text.includes('Nagar') || text.includes('Bengaluru') || text.includes('Karnataka')) {
+          address = text;
+        }
+        // Website - contains .com or website
+        else if (text.includes('.com') || text.includes('www')) {
+          website = text;
         }
       }
-      return null;
-    });
-    
-    const hours = await page.locator('span.ZDu9vd').textContent().catch(() => null);
+      
+      // Phone - find div.rogA2c that contains phone number
+      const phone = await page.evaluate(() => {
+        const rogA2cElements = document.querySelectorAll('div.rogA2c');
+        
+        for (let element of rogA2cElements) {
+          const text = element.textContent?.trim();
+          
+          if (text && text.match(/\d{3,}\s*\d{3,}\s*\d{3,}/)) {
+            return text;
+          }
+        }
+        return null;
+      });
+      
+      const hours = await page.locator('span.ZDu9vd').textContent().catch(() => null);
 
-    await browser.close();
+      await browser.close();
 
-    // Return data in the same format as your Express server
-    const extractedData = { 
-      name,
-      address,
-      phone,
-      website,
-      hours
-    };
+      playwrightData = { 
+        name,
+        address,
+        phone,
+        website,
+        hours
+      };
+    } catch (playwrightError) {
+      console.log('Playwright not available on Vercel, using Cheerio fallback');
+    }
+
+    // Fallback to Cheerio for Vercel
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        Connection: "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const html = await response.text()
+    const $ = cheerio.load(html)
 
     // Convert to the expected GoogleBusinessData format
     const businessData: GoogleBusinessData = {
-      name: extractedData.name || "Business Name Not Found",
+      name: playwrightData?.name ||
+        $('h1.DUwDvf.lfPIob').text().trim() ||
+        $('h1[data-attrid="title"]').text().trim() ||
+        "Business Name Not Found",
       category: "Category Not Found",
-      address: extractedData.address || "Address Not Found",
-      phone: extractedData.phone || "Phone Not Found",
-      website: extractedData.website || "Website Not Found",
+      address: playwrightData?.address ||
+        $('.Io6YTe.fontBodyMedium.kR99db.fdkmkc').filter((i, el) => {
+          const text = $(el).text().trim();
+          return text.includes('Rd') || text.includes('Nagar') || text.includes('Bengaluru') || text.includes('Karnataka');
+        }).first().text().trim() ||
+        "Address Not Found",
+      phone: playwrightData?.phone ||
+        $('div.rogA2c').filter((i, el) => {
+          const text = $(el).text().trim();
+          return text.match(/\d{3,}\s*\d{3,}\s*\d{3,}/);
+        }).first().text().trim() ||
+        "Phone Not Found",
+      website: playwrightData?.website ||
+        $('.Io6YTe.fontBodyMedium.kR99db.fdkmkc').filter((i, el) => {
+          const text = $(el).text().trim();
+          return text.includes('.com') || text.includes('www');
+        }).first().text().trim() ||
+        "Website Not Found",
       rating: "Rating Not Found",
       reviewCount: "Review Count Not Found",
       priceRange: "Price Range Not Available",
       description: "Description Not Available",
-      hours: extractedData.hours ? [{ day: "Hours", hours: extractedData.hours }] : [],
+      hours: playwrightData?.hours ? [{ day: "Hours", hours: playwrightData.hours }] : [],
       photos: [],
       reviews: [],
       amenities: [],
